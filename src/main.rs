@@ -512,6 +512,14 @@ impl std::fmt::Display for Team {
         }
         writeln!(f)?;
         for i in 0..TEAM_SIZE {
+            if let Some(m) = self.0[i].and_then(|a| a.modifier) {
+                write!(f, "│ {} │ ", m)?;
+            } else {
+                write!(f, "│    │ ")?;
+            }
+        }
+        writeln!(f)?;
+        for i in 0..TEAM_SIZE {
             if let Some(a) = self.0[i] {
                 write!(f, "│ {} │ ", a.animal)?;
             } else {
