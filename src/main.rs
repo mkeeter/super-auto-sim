@@ -45,8 +45,8 @@ impl Animal {
         }
     }
 
-    /// Returns the default health and attack for an animal, or an error
-    /// if the animal can't be bought from the shop.
+    /// Returns the default health and attack for an animal; panics if the
+    /// selected animal can't be purchased from the shop.
     fn default_power(&self) -> (u32, u32) {
         match self {
             Self::Ant => (2, 1),
@@ -72,7 +72,11 @@ impl Animal {
 
 impl std::fmt::Display for Animal {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.emoji())
+        write!(f, "{}", self.emoji())?;
+        if *self == Self::Beaver {
+            write!(f, " ")?; // Work around an iTerm2 bug (#10186)
+        }
+        Ok(())
     }
 }
 
@@ -501,6 +505,43 @@ impl Team {
     }
 }
 
+impl std::fmt::Display for Team {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        for _ in 0..TEAM_SIZE {
+            write!(f, "┌────┐ ")?;
+        }
+        writeln!(f)?;
+        for i in 0..TEAM_SIZE {
+            if let Some(a) = self.0[i] {
+                write!(f, "│ {} │ ", a.animal)?;
+            } else {
+                write!(f, "│    │ ")?;
+            }
+        }
+        writeln!(f)?;
+        for i in 0..TEAM_SIZE {
+            if let Some(a) = self.0[i] {
+                write!(f, "│❤️  {}│ ", a.health)?;
+            } else {
+                write!(f, "│    │ ")?;
+            }
+        }
+        writeln!(f)?;
+        for i in 0..TEAM_SIZE {
+            if let Some(a) = self.0[i] {
+                write!(f, "│⚔️  {}│ ", a.attack)?;
+            } else {
+                write!(f, "│    │ ")?;
+            }
+        }
+        writeln!(f)?;
+        for _ in 0..TEAM_SIZE {
+            write!(f, "└────┘ ")?;
+        }
+        Ok(())
+    }
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 
 fn random_team(seed: u64) -> Team {
@@ -515,14 +556,17 @@ fn random_team(seed: u64) -> Team {
     team.compact();
     team
 }
+
+////////////////////////////////////////////////////////////////////////////////
+
 fn main() {
-    let mut seen = HashSet::new();
     env_logger::init();
+    let mut seen = HashSet::new();
     for i in 0.. {
         let seed = rand::thread_rng().gen();
         let team = random_team(seed);
         if seen.insert(team) {
-            println!("New team [{}]: {:?}", seed, team);
+            println!("New team [{}]:\n{}", seed, team);
         }
         if i % 10000 == 0 {
             println!("{} [{}]", i, seen.len());
