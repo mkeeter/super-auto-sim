@@ -45,6 +45,24 @@ impl Animal {
         }
     }
 
+    /// Checks whether the given animal type is deterministic in battle
+    fn deterministic_in_battle(&self) -> bool {
+        match self {
+            Self::Ant => false,
+            Self::Beaver => true,
+            Self::Cricket => true,
+            Self::Duck => true,
+            Self::Fish => true,
+            Self::Horse => true,
+            Self::Mosquito => false,
+            Self::Otter => true,
+            Self::Pig => true,
+
+            Self::GhostCricket => true,
+            Self::Bee => true,
+        }
+    }
+
     /// Returns the default health and attack for an animal; panics if the
     /// selected animal can't be purchased from the shop.
     fn default_power(&self) -> (u32, u32) {
@@ -187,14 +205,14 @@ struct Shop {
 }
 
 impl Shop {
-    fn new() -> Self {
+    fn new<R: rand::Rng>(rng: &mut R) -> Self {
         let mut animals = [None; STORE_ANIMAL_COUNT];
         for a in animals.iter_mut() {
-            *a = Some(Friend::new(rand::random()));
+            *a = Some(Friend::new(rng.gen()));
         }
         let mut foods = [None; STORE_FOOD_COUNT];
         for f in foods.iter_mut() {
-            *f = Some(rand::random());
+            *f = Some(rng.gen());
         }
         Shop { animals, foods }
     }
@@ -290,7 +308,7 @@ impl<R: rand::Rng> BuyPhase<R> {
         );
         match food {
             Food::Apple => {
-                trace!("    Buffing by (+1, +1)");
+                trace!("    Buffing by ❤️  +1, ⚔️  +1");
                 friend.attack += 1;
                 friend.health += 1;
             }
@@ -308,7 +326,7 @@ impl<R: rand::Rng> BuyPhase<R> {
             Animal::Otter => {
                 // Give a random friend (+1, +1)
                 for i in self.team.random_friends(1, &mut self.rng) {
-                    trace!("    🦦 on buy bufs {} at {} by (+1, +1)", f.animal, i);
+                    trace!("    🦦 on buy bufs {} at {} by ❤️  +1, ⚔️  +1", f.animal, i);
                     let f = self.team.0[i].as_mut().unwrap();
                     f.health += 1;
                     f.attack += 1;
@@ -326,18 +344,28 @@ impl<R: rand::Rng> BuyPhase<R> {
                 // Give two random friends +1 Health
                 for i in self.team.random_friends(2, &mut self.rng) {
                     let f = self.team.0[i].as_mut().unwrap();
-                    trace!("    🦫 on sell bufs {} at {} by (+1, +1)", f.animal, i);
+                    trace!(
+                        "    {} on sell bufs {} at {} b❤️  +1 ",
+                        a.animal,
+                        f.animal,
+                        i
+                    );
                     f.health += 1;
                 }
             }
             Animal::Duck => {
                 // Give shop pets +1 Health
                 for f in self.shop.animals.iter_mut().flatten() {
-                    trace!("    🦆 on sell bufs {} in shop by (+1, +0)", f.animal);
+                    trace!(
+                        "    {} on sell bufs {} in shop by ❤️  +1",
+                        a.animal,
+                        f.animal
+                    );
                     f.health += 1;
                 }
             }
             Animal::Pig => {
+                trace!("    {} on sell gives +1 gold", a.animal);
                 // Give player +1 gold
                 self.gold += 1;
             }
@@ -386,7 +414,8 @@ impl<R: rand::Rng> BuyPhase<R> {
                 if self.gold == 0 {
                     return true;
                 } else {
-                    self.shop = Shop::new();
+                    trace!("Re-rolling shop");
+                    self.shop = Shop::new(&mut self.rng);
                     self.gold -= 1;
                 }
             }
@@ -424,7 +453,12 @@ impl Team {
                 // This is technically a temporary buf, but we're only
                 // simulating a single turn here, so it doesn't matter.
                 let f = self.0[pos].as_mut().unwrap();
-                trace!("    🐴 at {} bufs {} at {} by (+1, +1)", i, f.animal, pos);
+                trace!(
+                    "    🐴 at {} bufs {}  at {} by ❤️  +1, ⚔️  +1",
+                    i,
+                    f.animal,
+                    pos
+                );
                 f.attack += 1;
                 f.health += 1;
             }
@@ -553,11 +587,13 @@ impl std::fmt::Display for Team {
 ////////////////////////////////////////////////////////////////////////////////
 
 fn random_team(seed: u64) -> Team {
+    let mut rng = ChaChaRng::seed_from_u64(seed);
+    let shop = Shop::new(&mut rng);
     let mut buy = BuyPhase {
         team: Team([None; TEAM_SIZE]),
         gold: 10,
-        shop: Shop::new(),
-        rng: ChaChaRng::seed_from_u64(seed),
+        shop,
+        rng,
     };
     buy.run_random();
     let mut team = buy.team;
@@ -569,15 +605,28 @@ fn random_team(seed: u64) -> Team {
 
 fn main() {
     env_logger::init();
-    let mut seen = HashSet::new();
-    for i in 0.. {
-        let seed = rand::thread_rng().gen();
-        let team = random_team(seed);
-        if seen.insert(team) {
-            println!("New team [{}]:\n{}", seed, team);
+    let args = std::env::args();
+    match args.len() {
+        1 => {
+            let mut seen = HashSet::new();
+            for i in 0.. {
+                let seed = rand::thread_rng().gen();
+                let team = random_team(seed);
+                if seen.insert(team) {
+                    println!("New team [{}]:\n{}", seed, team);
+                }
+                if i % 10000 == 0 {
+                    println!("{} [{}]", i, seen.len());
+                }
+            }
         }
-        if i % 10000 == 0 {
-            println!("{} [{}]", i, seen.len());
+        2 => {
+            let seed = args.last().unwrap().parse().unwrap();
+            let team = random_team(seed);
+            println!("{}", team);
+        }
+        i => {
+            panic!("Invalid argument count {}", i);
         }
     }
 }
