@@ -1085,11 +1085,9 @@ fn analyze_scores(teams: Vec<Team>, results: HashMap<usize, HashMap<usize, Recor
 
     for (k, v) in &results {
         let mut num_wins = 0.0;
-        let mut num_ties = 0.0;
         let mut count = 0.0;
-        for r in v.values() {
+        for (j, r) in v {
             num_wins += r.wins;
-            num_ties += r.ties;
             count += 1.0;
         }
         if num_wins / count > most_wins {
@@ -1098,8 +1096,9 @@ fn analyze_scores(teams: Vec<Team>, results: HashMap<usize, HashMap<usize, Recor
         }
     }
     println!(
-        "The team with the most wins ({:.2}%):\n{}",
+        "The team with the most wins ({:.2}%) [{}]:\n{}",
         most_wins * 100.0,
+        best_team,
         teams[best_team]
     );
 }
