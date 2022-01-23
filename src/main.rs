@@ -232,45 +232,6 @@ struct Shop {
 }
 
 impl Shop {
-    fn new_deterministic() -> Vec<Self> {
-        let mut animals = vec![[None; STORE_ANIMAL_COUNT]];
-        for i in 0..STORE_ANIMAL_COUNT {
-            let mut next = Vec::new();
-            for j in &animals {
-                for species in Animal::into_enum_iter().filter(Animal::can_purchase) {
-                    let mut j = *j;
-                    j[i] = Some(Friend::new(species));
-                    next.push(j);
-                }
-            }
-            std::mem::swap(&mut animals, &mut next);
-        }
-
-        let mut foods = vec![[None; STORE_FOOD_COUNT]];
-        for i in 0..STORE_FOOD_COUNT {
-            let mut next = Vec::new();
-            for j in &foods {
-                for food in Food::into_enum_iter() {
-                    let mut j = *j;
-                    j[i] = Some(food);
-                    next.push(j);
-                }
-            }
-            std::mem::swap(&mut foods, &mut next);
-        }
-
-        let mut out = Vec::new();
-        for a in &animals {
-            for f in &foods {
-                out.push(Shop {
-                    animals: *a,
-                    foods: *f,
-                });
-            }
-        }
-        out
-    }
-
     fn new<R: rand::Rng>(rng: &mut R) -> Self {
         let mut animals = [None; STORE_ANIMAL_COUNT];
         for a in animals.iter_mut() {
@@ -711,9 +672,6 @@ fn random_team(seed: u64) -> Team {
 
 fn main() {
     env_logger::init();
-    let s = Shop::new_deterministic();
-    println!("Got {} shops", s.len());
-    panic!("lol");
     let args = std::env::args();
     match args.len() {
         1 => {
