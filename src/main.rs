@@ -1,8 +1,11 @@
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use enum_iterator::IntoEnumIterator;
-use log::{debug, info, trace};
+use log::{debug, info, trace, LevelFilter};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaChaRng;
 use serde::{Deserialize, Serialize};
@@ -287,14 +290,14 @@ impl<R: rand::Rng> BuyPhase<R> {
         self.gold -= 3;
         let friend = self.shop.animals[shop_pos].take().unwrap();
 
-        match &mut self.team.0[team_pos] {
+        match &mut self.team[team_pos] {
             None => {
                 trace!("Buying {} at position {}", friend.animal, team_pos);
                 self.on_buy(friend);
-                self.team.0[team_pos] = Some(friend);
+                self.team[team_pos] = Some(friend);
 
                 for i in 0..TEAM_SIZE {
-                    if i != team_pos && self.team.0[i].is_some() {
+                    if i != team_pos && self.team[i].is_some() {
                         self.team.on_summon(i, team_pos);
                     }
                 }
@@ -307,9 +310,9 @@ impl<R: rand::Rng> BuyPhase<R> {
                 // which matters in cases where the animal levels up.  For
                 // convenience, we remove the animal from the team briefly,
                 // then reinstall it.
-                let friend = self.team.0[team_pos].take().unwrap();
+                let friend = self.team[team_pos].take().unwrap();
                 self.on_buy(friend);
-                self.team.0[team_pos] = Some(friend);
+                self.team[team_pos] = Some(friend);
             }
         }
         // XXX: There are also "friend is bought" triggers, but nothing in Tier
@@ -317,7 +320,7 @@ impl<R: rand::Rng> BuyPhase<R> {
     }
 
     fn combine_animal(&mut self, team_pos: usize, g: Friend) {
-        let f = self.team.0[team_pos].as_mut().unwrap();
+        let f = self.team[team_pos].as_mut().unwrap();
         assert!(f.animal == g.animal);
         trace!("Combining {} at position {}", f.animal, team_pos);
         f.health = std::cmp::max(f.health, g.health) + 1;
@@ -327,15 +330,15 @@ impl<R: rand::Rng> BuyPhase<R> {
     }
 
     fn sell_animal(&mut self, team_pos: usize) {
-        assert!(self.team.0[team_pos].is_some());
+        assert!(self.team[team_pos].is_some());
 
-        let a = self.team.0[team_pos].take().unwrap();
+        let a = self.team[team_pos].take().unwrap();
         trace!("Selling {} at position {}", a.animal, team_pos);
 
         self.gold += a.level();
         self.on_sell(a);
         for i in 0..TEAM_SIZE {
-            if i != team_pos && self.team.0[i].is_some() {
+            if i != team_pos && self.team[i].is_some() {
                 self.on_sold(i);
             }
         }
@@ -345,9 +348,9 @@ impl<R: rand::Rng> BuyPhase<R> {
     /// member of the team.
     fn buy_food(&mut self, shop_pos: usize, team_pos: usize) {
         assert!(self.shop.foods[shop_pos].is_some());
-        assert!(self.team.0[team_pos].is_some());
+        assert!(self.team[team_pos].is_some());
 
-        let friend = self.team.0[team_pos].as_mut().unwrap();
+        let friend = self.team[team_pos].as_mut().unwrap();
         let food = self.shop.foods[shop_pos].take().unwrap();
         self.gold -= 3;
         trace!(
@@ -376,7 +379,7 @@ impl<R: rand::Rng> BuyPhase<R> {
             Animal::Otter => {
                 // Give a random friend (+1, +1)
                 for i in self.team.random_friends(1, &mut self.rng) {
-                    let g = self.team.0[i].as_mut().unwrap();
+                    let g = self.team[i].as_mut().unwrap();
                     trace!(
                         "    {} on buy bufs {} at {} by ❤️  +1, ⚔️  +1",
                         f.animal,
@@ -399,7 +402,7 @@ impl<R: rand::Rng> BuyPhase<R> {
                 // Give two random friends +1 Health
                 let delta = a.level();
                 for i in self.team.random_friends(2, &mut self.rng) {
-                    let f = self.team.0[i].as_mut().unwrap();
+                    let f = self.team[i].as_mut().unwrap();
                     trace!(
                         "    {} on sell bufs {} at {} b❤️  +{} ",
                         a.animal,
@@ -486,8 +489,8 @@ impl<R: rand::Rng> BuyPhase<R> {
                 let mut any_targets = false;
                 for i in 0..TEAM_SIZE {
                     for j in (i + 1)..TEAM_SIZE {
-                        let a = self.team.0[i];
-                        let b = self.team.0[j];
+                        let a = self.team[i];
+                        let b = self.team[j];
                         if a.is_some() && b.is_some() && a.unwrap().animal == b.unwrap().animal {
                             targets[i][j] = true;
                             targets[j][i] = true;
@@ -508,7 +511,7 @@ impl<R: rand::Rng> BuyPhase<R> {
                             break j;
                         }
                     };
-                    let friend = self.team.0[i].take().unwrap();
+                    let friend = self.team[i].take().unwrap();
                     trace!("Merging {} at {} into {}", friend.animal, i, j);
                     self.combine_animal(j, friend);
                 }
@@ -539,14 +542,14 @@ impl Team {
     /// a new animal summoned at position `pos`
     fn on_summon(&mut self, i: usize, pos: usize) {
         assert!(i != pos);
-        assert!(self.0[i].is_some());
-        assert!(self.0[pos].is_some());
+        assert!(self[i].is_some());
+        assert!(self[pos].is_some());
 
-        match self.0[i].unwrap().animal {
+        match self[i].unwrap().animal {
             Animal::Horse => {
                 // This is technically a temporary buf, but we're only
                 // simulating a single turn here, so it doesn't matter.
-                let f = self.0[pos].as_mut().unwrap();
+                let f = self[pos].as_mut().unwrap();
                 trace!(
                     "    🐴 at {} bufs {}  at {} by ❤️  +1, ⚔️  +1",
                     i,
@@ -571,7 +574,7 @@ impl Team {
         let mut out = [false; TEAM_SIZE];
         while n > 0 {
             let i = rng.gen_range(0..TEAM_SIZE);
-            if !out[i] && self.0[i].is_some() {
+            if !out[i] && self[i].is_some() {
                 out[i] = true;
                 n -= 1;
             }
@@ -595,7 +598,7 @@ impl Team {
         }
         loop {
             let i = rng.gen_range(0..STORE_ANIMAL_COUNT);
-            if self.0[i].is_some() {
+            if self[i].is_some() {
                 return Some(i);
             }
         }
@@ -608,7 +611,7 @@ impl Team {
         }
         loop {
             let i = rng.gen_range(0..STORE_ANIMAL_COUNT);
-            match self.0[i] {
+            match self[i] {
                 None => return Some(i),
                 Some(f) => {
                     if f.animal == a {
@@ -623,60 +626,73 @@ impl Team {
     fn compact(&mut self) {
         let mut i = 0;
         loop {
-            while i < TEAM_SIZE && self.0[i].is_some() {
+            while i < TEAM_SIZE && self[i].is_some() {
                 i += 1;
             }
             let mut j = i;
-            while j < TEAM_SIZE && self.0[j].is_none() {
+            while j < TEAM_SIZE && self[j].is_none() {
                 j += 1;
             }
             if i >= TEAM_SIZE || j >= TEAM_SIZE {
                 break;
             }
-            self.0[i] = self.0[j].take();
+            self[i] = self[j].take();
         }
+    }
+}
+
+impl std::ops::Index<usize> for Team {
+    type Output = Option<Friend>;
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.0[index]
+    }
+}
+
+impl std::ops::IndexMut<usize> for Team {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.0[index]
     }
 }
 
 impl std::fmt::Display for Team {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        for _ in 0..TEAM_SIZE {
+        for _ in (0..TEAM_SIZE).rev() {
             write!(f, "┌────┐ ")?;
         }
         writeln!(f)?;
-        for i in 0..TEAM_SIZE {
-            if let Some(m) = self.0[i].and_then(|a| a.modifier) {
+        for i in (0..TEAM_SIZE).rev() {
+            if let Some(m) = self[i].and_then(|a| a.modifier) {
                 write!(f, "│ {} │ ", m)?;
             } else {
                 write!(f, "│    │ ")?;
             }
         }
         writeln!(f)?;
-        for i in 0..TEAM_SIZE {
-            if let Some(a) = self.0[i] {
+        for i in (0..TEAM_SIZE).rev() {
+            if let Some(a) = self[i] {
                 write!(f, "│ {} │ ", a.animal)?;
             } else {
                 write!(f, "│    │ ")?;
             }
         }
         writeln!(f)?;
-        for i in 0..TEAM_SIZE {
-            if let Some(a) = self.0[i] {
+        for i in (0..TEAM_SIZE).rev() {
+            if let Some(a) = self[i] {
                 write!(f, "│❤️  {}│ ", a.health)?;
             } else {
                 write!(f, "│    │ ")?;
             }
         }
         writeln!(f)?;
-        for i in 0..TEAM_SIZE {
-            if let Some(a) = self.0[i] {
+        for i in (0..TEAM_SIZE).rev() {
+            if let Some(a) = self[i] {
                 write!(f, "│⚔️  {}│ ", a.attack)?;
             } else {
                 write!(f, "│    │ ")?;
             }
         }
         writeln!(f)?;
-        for _ in 0..TEAM_SIZE {
+        for _ in (0..TEAM_SIZE).rev() {
             write!(f, "└────┘ ")?;
         }
         Ok(())
@@ -702,38 +718,85 @@ fn random_team(seed: u64) -> Team {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-fn main() {
-    env_logger::init();
-    let args = std::env::args();
+struct Battle(Team, Team);
+impl std::fmt::Display for Battle {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let team = format!("{}", self.0);
+
+        let mut enemy = self.1;
+        enemy.0.reverse();
+        let enemy = format!("{}", self.1);
+
+        for (i, (a, b)) in team.split('\n').zip(enemy.split('\n')).enumerate() {
+            if i > 0 {
+                writeln!(f)?;
+            }
+            write!(f, "{}    {}", a, b)?;
+        }
+        Ok(())
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+const TEAMS_FILE: &str = "teams.ron";
+
+fn generate_teams() {
     let exit_flag = std::sync::Arc::new(AtomicBool::new(false));
     let exit_flag_copy = exit_flag.clone();
     ctrlc::set_handler(move || exit_flag_copy.store(true, Ordering::Release)).unwrap();
+    let mut seen = HashSet::new();
+    for i in 0.. {
+        // Check the flag periodically for Ctrl-C
+        if i % 100 == 0 && exit_flag.load(Ordering::Acquire) {
+            break;
+        }
+        let seed = rand::thread_rng().gen();
+        let team = random_team(seed);
+        if seen.insert(team) {
+            debug!("New team [{}]:\n{}", seed, team);
+        }
+        if i % 1000000 == 0 {
+            debug!("{} [{}]", i, seen.len());
+        }
+    }
+    info!("Saving teams to '{}'", TEAMS_FILE);
+    let seen: Vec<Team> = seen.into_iter().collect();
+    std::fs::write(
+        TEAMS_FILE,
+        ron::to_string(&seen).expect("Failed to serialize teams"),
+    )
+    .expect("Failed to save teams");
+}
+
+fn score_teams(teams: Vec<Team>) {
+    // TODO
+}
+
+fn main() {
+    use env_logger::Builder;
+
+    let mut log = Builder::new();
+
+    let args = std::env::args();
     match args.len() {
         1 => {
-            let mut seen = HashSet::new();
-            for i in 0.. {
-                // Check the flag periodically for Ctrl-C
-                if i % 100 == 0 && exit_flag.load(Ordering::Acquire) {
-                    break;
-                }
-                let seed = rand::thread_rng().gen();
-                let team = random_team(seed);
-                if seen.insert(team) {
-                    debug!("New team [{}]:\n{}", seed, team);
-                }
-                if i % 1000000 == 0 {
-                    debug!("{} [{}]", i, seen.len());
-                }
+            log.filter_level(LevelFilter::Debug);
+            log.parse_env("RUST_LOG");
+            log.init();
+
+            if let Ok(d) = std::fs::read_to_string(TEAMS_FILE) {
+                let teams: Vec<Team> = ron::from_str(&d).unwrap();
+                score_teams(teams);
+            } else {
+                generate_teams();
             }
-            let filename = "teams.ron";
-            info!("Saving teams to '{}'", filename);
-            std::fs::write(
-                filename,
-                ron::to_string(&seen).expect("Failed to serialize teams"),
-            )
-            .expect("Failed to save teams");
         }
         2 => {
+            log.filter_level(LevelFilter::Trace);
+            log.parse_env("RUST_LOG");
+            log.init();
+
             let seed = args.last().unwrap().parse().unwrap();
             let team = random_team(seed);
             debug!("Got team [{}]:\n{}", seed, team);
