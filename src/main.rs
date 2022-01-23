@@ -639,6 +639,53 @@ impl Team {
             self[i] = self[j].take();
         }
     }
+
+    fn fmt_with_range<I: Iterator<Item = usize> + Clone>(
+        &self,
+        f: &mut std::fmt::Formatter,
+        range: I,
+    ) -> std::fmt::Result {
+        for i in range.clone() {
+            write!(f, "{} ───┐ ", i)?;
+        }
+        writeln!(f)?;
+        for i in range.clone() {
+            if let Some(m) = self[i].and_then(|a| a.modifier) {
+                write!(f, "│ {} │ ", m)?;
+            } else {
+                write!(f, "│    │ ")?;
+            }
+        }
+        writeln!(f)?;
+        for i in range.clone() {
+            if let Some(a) = self[i] {
+                write!(f, "│ {} │ ", a.animal)?;
+            } else {
+                write!(f, "│    │ ")?;
+            }
+        }
+        writeln!(f)?;
+        for i in range.clone() {
+            if let Some(a) = self[i] {
+                write!(f, "│❤️  {}│ ", a.health)?;
+            } else {
+                write!(f, "│    │ ")?;
+            }
+        }
+        writeln!(f)?;
+        for i in range.clone() {
+            if let Some(a) = self[i] {
+                write!(f, "│⚔️  {}│ ", a.attack)?;
+            } else {
+                write!(f, "│    │ ")?;
+            }
+        }
+        writeln!(f)?;
+        for _ in range.clone() {
+            write!(f, "└────┘ ")?;
+        }
+        Ok(())
+    }
 }
 
 impl std::ops::Index<usize> for Team {
@@ -654,48 +701,21 @@ impl std::ops::IndexMut<usize> for Team {
     }
 }
 
+struct TeamPrinter<'a>(&'a Team, bool);
+
 impl std::fmt::Display for Team {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        for _ in (0..TEAM_SIZE).rev() {
-            write!(f, "┌────┐ ")?;
+        write!(f, "{}", TeamPrinter(self, true))
+    }
+}
+
+impl std::fmt::Display for TeamPrinter<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        if self.1 {
+            self.0.fmt_with_range(f, (0..TEAM_SIZE).rev())
+        } else {
+            self.0.fmt_with_range(f, 0..TEAM_SIZE)
         }
-        writeln!(f)?;
-        for i in (0..TEAM_SIZE).rev() {
-            if let Some(m) = self[i].and_then(|a| a.modifier) {
-                write!(f, "│ {} │ ", m)?;
-            } else {
-                write!(f, "│    │ ")?;
-            }
-        }
-        writeln!(f)?;
-        for i in (0..TEAM_SIZE).rev() {
-            if let Some(a) = self[i] {
-                write!(f, "│ {} │ ", a.animal)?;
-            } else {
-                write!(f, "│    │ ")?;
-            }
-        }
-        writeln!(f)?;
-        for i in (0..TEAM_SIZE).rev() {
-            if let Some(a) = self[i] {
-                write!(f, "│❤️  {}│ ", a.health)?;
-            } else {
-                write!(f, "│    │ ")?;
-            }
-        }
-        writeln!(f)?;
-        for i in (0..TEAM_SIZE).rev() {
-            if let Some(a) = self[i] {
-                write!(f, "│⚔️  {}│ ", a.attack)?;
-            } else {
-                write!(f, "│    │ ")?;
-            }
-        }
-        writeln!(f)?;
-        for _ in (0..TEAM_SIZE).rev() {
-            write!(f, "└────┘ ")?;
-        }
-        Ok(())
     }
 }
 
@@ -718,20 +738,69 @@ fn random_team(seed: u64) -> Team {
 
 ////////////////////////////////////////////////////////////////////////////////
 
+#[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 struct Battle(Team, Team);
+impl Battle {
+    /// Performs pre-battle actions, returning all possible states
+    fn before_battle<R: Rng>(&mut self, rng: &mut R) {
+        let mut out = vec![*self];
+        for t in [true, false] {
+            for i in 0..TEAM_SIZE {
+                self.on_battle_start(i, t, rng);
+            }
+        }
+    }
+    fn team(&self, t: bool) -> &Team {
+        if t {
+            &self.0
+        } else {
+            &self.1
+        }
+    }
+    fn team_mut(&mut self, t: bool) -> &mut Team {
+        if t {
+            &mut self.0
+        } else {
+            &mut self.1
+        }
+    }
+    fn on_battle_start<R: Rng>(&mut self, i: usize, team: bool, rng: &mut R) {
+        let f = match self.team(team)[i] {
+            Some(f) => f,
+            None => return,
+        };
+        match f.animal {
+            Animal::Mosquito => {
+                for j in self.team(!team).random_friends(f.level(), rng) {
+                    let g = self.team_mut(!team)[j].as_mut().unwrap();
+                    trace!("{} at {} shot {} at {} for 1", f.animal, i, g.animal, j);
+                    g.health -= 1;
+                }
+            }
+            _ => (),
+        }
+    }
+
+    /// Executes a single step of the battle, returning all possible states
+    fn step(&mut self) {
+        // Perform a single round of battle
+    }
+}
+
 impl std::fmt::Display for Battle {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let team = format!("{}", self.0);
-
-        let mut enemy = self.1;
-        enemy.0.reverse();
-        let enemy = format!("{}", self.1);
+        let enemy = format!("{}", TeamPrinter(&self.1, false));
 
         for (i, (a, b)) in team.split('\n').zip(enemy.split('\n')).enumerate() {
             if i > 0 {
                 writeln!(f)?;
             }
-            write!(f, "{}    {}", a, b)?;
+            if i == 2 {
+                write!(f, "{} ── {}", a, b)?;
+            } else {
+                write!(f, "{}    {}", a, b)?;
+            }
         }
         Ok(())
     }
@@ -760,7 +829,7 @@ fn generate_teams() {
             debug!("{} [{}]", i, seen.len());
         }
     }
-    info!("Saving teams to '{}'", TEAMS_FILE);
+    info!("Saving {} teams to '{}'", seen.len(), TEAMS_FILE);
     let seen: Vec<Team> = seen.into_iter().collect();
     std::fs::write(
         TEAMS_FILE,
@@ -770,6 +839,12 @@ fn generate_teams() {
 }
 
 fn score_teams(teams: Vec<Team>) {
+    for a in &teams {
+        for b in &teams {
+            let battle = Battle(*a, *b);
+            println!("FIGHTING:\n{}", battle);
+        }
+    }
     // TODO
 }
 
@@ -793,6 +868,8 @@ fn main() {
             }
         }
         2 => {
+            // By default, when asked to generate a team, print the verbose
+            // team generation log.
             log.filter_level(LevelFilter::Trace);
             log.parse_env("RUST_LOG");
             log.init();
