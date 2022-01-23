@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -567,6 +567,17 @@ impl Team {
         self.0.iter().filter(|i| i.is_some()).count()
     }
 
+    fn is_empty(&self) -> bool {
+        self.count() == 0
+    }
+
+    fn deterministic_in_battle(&self) -> bool {
+        self.0
+            .iter()
+            .flatten()
+            .all(|f| f.animal.deterministic_in_battle())
+    }
+
     /// Picks some number of random friends from the team, returning a mask.  If
     /// there are fewer than `n` members on the team, returns a smaller number.
     fn random_friends_mask<R: rand::Rng>(&self, mut n: usize, rng: &mut R) -> [bool; TEAM_SIZE] {
@@ -686,6 +697,119 @@ impl Team {
         }
         Ok(())
     }
+    /// Removes dead animals from the team, performing their on-death actions
+    /// then compacting the team afterwards.
+    fn remove_dead<R: Rng>(&mut self, rng: &mut R) {
+        let mut changed = false;
+        for i in 0..TEAM_SIZE {
+            if self[i].is_some() && self[i].unwrap().health == 0 {
+                let f = self[i].take().unwrap();
+                trace!("{} at {} is dead, removing", f.animal, i);
+                self.on_death(f, i, rng);
+                changed = true;
+            }
+        }
+        if changed {
+            trace!("Compacting team");
+            self.compact();
+        }
+    }
+    fn on_death<R: Rng>(&mut self, f: Friend, i: usize, rng: &mut R) {
+        assert!(self[i].is_none());
+        match f.animal {
+            Animal::Cricket => {
+                trace!("Summoning ghost cricket at {}", i);
+                self[i] = Some(Friend {
+                    animal: Animal::GhostCricket,
+                    attack: f.level(),
+                    health: f.level(),
+                    modifier: None,
+                    exp: 0,
+                });
+                for j in 0..TEAM_SIZE {
+                    if i != j && self[j].is_some() {
+                        self.on_summon(j, i);
+                    }
+                }
+            }
+            Animal::Ant => {
+                if let Some(j) = self.random_friend(rng) {
+                    let g = self[j].as_mut().unwrap();
+                    let attack = f.level() * 2;
+                    let health = f.level();
+                    trace!(
+                        "{} on death is buffing {} at {} by ❤️  +{}, ⚔️  + {}",
+                        f.animal,
+                        g.animal,
+                        j,
+                        health,
+                        attack
+                    );
+                    g.attack += attack;
+                    g.health += health;
+                }
+            }
+            _ => (),
+        }
+        match f.modifier {
+            Some(Modifier::Honey) => {
+                let bee = Friend {
+                    animal: Animal::Bee,
+                    attack: 1,
+                    health: 1,
+                    modifier: None,
+                    exp: 0,
+                };
+                if let Some(i) = self.make_space_at(i) {
+                    trace!("Summoning {} at {}", bee.animal, i);
+                    self[i] = Some(bee);
+                    for j in 0..TEAM_SIZE {
+                        if i != j && self[j].is_some() {
+                            self.on_summon(j, i);
+                        }
+                    }
+                } else {
+                    trace!("No room to summon {}", bee.animal);
+                }
+            }
+            None => (),
+        }
+    }
+    /// Attempts to make space at the given position.  Returns the empty
+    /// position, after shoving animals around, or None if the team is full.
+    fn make_space_at(&mut self, i: usize) -> Option<usize> {
+        if self.count() == TEAM_SIZE {
+            None
+        } else if self[i].is_none() {
+            Some(i)
+        } else {
+            // Look for an empty slot behind the target slot, and shift
+            // friends backwards (away from 0) to free up slot i
+            for j in (i + 1)..TEAM_SIZE {
+                if self[j].is_none() {
+                    for k in (i..j).rev() {
+                        assert!(self[k + 1].is_none());
+                        self[k + 1] = self[k].take();
+                    }
+                    assert!(self[i].is_none());
+                    return Some(i);
+                }
+            }
+            // Otherwise, look for an empty slot in front of the target
+            // slot, and shift friends forwards (towards 0)
+            for j in 0..i {
+                if self[j].is_none() {
+                    for k in j..i {
+                        assert!(self[k].is_none());
+                        self[k] = self[k + 1].take();
+                    }
+                    assert!(self[i].is_none());
+                    return Some(j);
+                }
+            }
+            unreachable!()
+        }
+    }
 }
 
 impl std::ops::Index<usize> for Team {
@@ -739,51 +863,109 @@ fn random_team(seed: u64) -> Team {
 ////////////////////////////////////////////////////////////////////////////////
 
 #[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+enum Winner {
+    TeamA,
+    TeamB,
+    Tied,
+}
+
+#[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 struct Battle(Team, Team);
 impl Battle {
+    /// Simulates a battle, returning the winner
+    fn run(mut self) -> Winner {
+        let seed = rand::thread_rng().gen();
+        let mut rng = ChaChaRng::seed_from_u64(seed);
+
+        trace!("Initial state:\n{}", self);
+        self.before_battle(&mut rng);
+        for i in 0.. {
+            trace!("Round {}:\n{}", i, self);
+            match (self.0.is_empty(), self.1.is_empty()) {
+                (true, true) => {
+                    trace!("Battle ended with a tie");
+                    return Winner::Tied;
+                }
+                (false, true) => {
+                    trace!("Battle ended with a win for Team A");
+                    return Winner::TeamA;
+                }
+                (true, false) => {
+                    trace!("Battle ended with a win for Team B");
+                    return Winner::TeamB;
+                }
+                (false, false) => self.step(&mut rng),
+            }
+        }
+        unreachable!();
+    }
+
+    /// Checks whether this battle is fully deterministic
+    fn is_deterministic(&self) -> bool {
+        self.0.deterministic_in_battle() && self.1.deterministic_in_battle()
+    }
+
     /// Performs pre-battle actions, returning all possible states
     fn before_battle<R: Rng>(&mut self, rng: &mut R) {
-        let mut out = vec![*self];
         for t in [true, false] {
             for i in 0..TEAM_SIZE {
                 self.on_battle_start(i, t, rng);
             }
         }
-    }
-    fn team(&self, t: bool) -> &Team {
-        if t {
-            &self.0
-        } else {
-            &self.1
-        }
-    }
-    fn team_mut(&mut self, t: bool) -> &mut Team {
-        if t {
-            &mut self.0
-        } else {
-            &mut self.1
-        }
+        // XXX This architecture wouldn't work for more complex situations,
+        // e.g. a mosquito sniping a hedgehog which then kills other stuff
+        self.0.remove_dead(rng);
+        self.1.remove_dead(rng);
     }
     fn on_battle_start<R: Rng>(&mut self, i: usize, team: bool, rng: &mut R) {
-        let f = match self.team(team)[i] {
+        let f = match self[team][i] {
             Some(f) => f,
             None => return,
         };
         match f.animal {
             Animal::Mosquito => {
-                for j in self.team(!team).random_friends(f.level(), rng) {
-                    let g = self.team_mut(!team)[j].as_mut().unwrap();
+                for j in self[!team].random_friends(f.level(), rng) {
+                    let g = self[!team][j].as_mut().unwrap();
                     trace!("{} at {} shot {} at {} for 1", f.animal, i, g.animal, j);
-                    g.health -= 1;
+                    g.health = g.health.saturating_sub(1);
                 }
             }
             _ => (),
         }
     }
 
-    /// Executes a single step of the battle, returning all possible states
-    fn step(&mut self) {
-        // Perform a single round of battle
+    /// Executes a single step of the battle, returning true if the battle ended
+    fn step<R: Rng>(&mut self, rng: &mut R) {
+        let f = self.0[0].as_mut().unwrap();
+        let g = self.1[0].as_mut().unwrap();
+        trace!("{} clashes with {}!", f.animal, g.animal);
+        f.health = f.health.saturating_sub(g.attack);
+        g.health = g.health.saturating_sub(f.attack);
+
+        // TODO
+        self.0.remove_dead(rng);
+        self.1.remove_dead(rng);
+    }
+}
+
+impl std::ops::Index<bool> for Battle {
+    type Output = Team;
+    fn index(&self, index: bool) -> &Self::Output {
+        if index {
+            &self.0
+        } else {
+            &self.1
+        }
+    }
+}
+
+impl std::ops::IndexMut<bool> for Battle {
+    fn index_mut(&mut self, index: bool) -> &mut Self::Output {
+        if index {
+            &mut self.0
+        } else {
+            &mut self.1
+        }
     }
 }
 
@@ -796,11 +978,7 @@ impl std::fmt::Display for Battle {
             if i > 0 {
                 writeln!(f)?;
             }
-            if i == 2 {
-                write!(f, "{} ── {}", a, b)?;
-            } else {
-                write!(f, "{}    {}", a, b)?;
-            }
+            write!(f, "{}   {}", a, b)?;
         }
         Ok(())
     }
@@ -809,6 +987,7 @@ impl std::fmt::Display for Battle {
 ////////////////////////////////////////////////////////////////////////////////
 
 const TEAMS_FILE: &str = "teams.ron";
+const SCORES_FILE: &str = "scores.ron";
 
 fn generate_teams() {
     let exit_flag = std::sync::Arc::new(AtomicBool::new(false));
@@ -838,14 +1017,91 @@ fn generate_teams() {
     .expect("Failed to save teams");
 }
 
+#[derive(Copy, Clone, Debug, Deserialize, Serialize)]
+struct Record {
+    wins: f32,
+    ties: f32,
+}
 fn score_teams(teams: Vec<Team>) {
-    for a in &teams {
-        for b in &teams {
+    let mut results: HashMap<usize, HashMap<usize, Record>> = HashMap::new();
+    for (i, a) in teams.iter().enumerate() {
+        for (j, b) in teams.iter().enumerate() {
             let battle = Battle(*a, *b);
-            println!("FIGHTING:\n{}", battle);
+            let num_battles = if battle.is_deterministic() { 1 } else { 100 };
+
+            let mut team_a = 0.0;
+            let mut team_b = 0.0;
+            let mut ties = 0.0;
+            for _ in 0..num_battles {
+                match battle.run() {
+                    Winner::TeamA => team_a += 1.0,
+                    Winner::TeamB => team_b += 1.0,
+                    Winner::Tied => ties += 1.0,
+                }
+            }
+            let num_battles = num_battles as f32;
+            results.entry(i).or_default().insert(
+                j,
+                Record {
+                    wins: team_a / num_battles,
+                    ties: ties / num_battles,
+                },
+            );
+            results.entry(j).or_default().insert(
+                i,
+                Record {
+                    wins: team_b / num_battles,
+                    ties: ties / num_battles,
+                },
+            );
+        }
+        let mut num_wins = 0.0;
+        let mut num_ties = 0.0;
+        let mut count = 0.0;
+        for r in results[&i].values() {
+            num_wins += r.wins;
+            num_ties += r.ties;
+            count += 1.0;
+        }
+        debug!(
+            "Team {} wins {:.1}% and draws {:.1}%:\n{}",
+            i,
+            num_wins / count * 100.0,
+            num_ties / count * 100.0,
+            teams[i]
+        );
+    }
+    std::fs::write(
+        SCORES_FILE,
+        ron::to_string(&results).expect("Failed to serialize scores"),
+    )
+    .expect("Failed to save scores");
+    // TODO
+}
+
+fn analyze_scores(teams: Vec<Team>, results: HashMap<usize, HashMap<usize, Record>>) {
+    let mut most_wins = 0.0;
+    let mut best_team = 0;
+
+    for (k, v) in &results {
+        let mut num_wins = 0.0;
+        let mut num_ties = 0.0;
+        let mut count = 0.0;
+        for r in v.values() {
+            num_wins += r.wins;
+            num_ties += r.ties;
+            count += 1.0;
+        }
+        if num_wins / count > most_wins {
+            best_team = *k;
+            most_wins = num_wins / count;
         }
     }
-    // TODO
+    println!(
+        "The team with the most wins ({:.2}%):\n{}",
+        most_wins * 100.0,
+        teams[best_team]
+    );
 }
 
 fn main() {
@@ -862,7 +1118,12 @@ fn main() {
 
             if let Ok(d) = std::fs::read_to_string(TEAMS_FILE) {
                 let teams: Vec<Team> = ron::from_str(&d).unwrap();
-                score_teams(teams);
+                if let Ok(d) = std::fs::read_to_string(SCORES_FILE) {
+                    let scores = ron::from_str(&d).unwrap();
+                    analyze_scores(teams, scores);
+                } else {
+                    score_teams(teams);
+                }
             } else {
                 generate_teams();
             }
