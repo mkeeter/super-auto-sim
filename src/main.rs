@@ -1,9 +1,11 @@
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use enum_iterator::IntoEnumIterator;
-use log::trace;
+use log::{debug, info, trace};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaChaRng;
+use serde::{Deserialize, Serialize};
 
 const TEAM_SIZE: usize = 5;
 const STORE_ANIMAL_COUNT: usize = 3;
@@ -12,7 +14,7 @@ const STORE_FOOD_COUNT: usize = 1;
 ////////////////////////////////////////////////////////////////////////////////
 
 /// Tier 1 animals in the free-to-play pack
-#[derive(Copy, Clone, Debug, Eq, Hash, IntoEnumIterator, PartialEq)]
+#[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 enum Animal {
     Ant,
     Beaver,
@@ -136,7 +138,6 @@ impl rand::distributions::Distribution<Animal> for rand::distributions::Standard
 
 ////////////////////////////////////////////////////////////////////////////////
 
-#[derive(Copy, Clone, Debug, Eq, Hash, IntoEnumIterator, PartialEq)]
 enum Food {
     Apple,
     Honey,
@@ -169,7 +170,7 @@ impl rand::distributions::Distribution<Food> for rand::distributions::Standard {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 enum Modifier {
     Honey,
 }
@@ -191,7 +192,7 @@ impl std::fmt::Display for Modifier {
 ////////////////////////////////////////////////////////////////////////////////
 
 /// A [Friend] is an animal embodied onto a team (or in the shop)
-#[derive(Copy, Clone, Hash, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 struct Friend {
     animal: Animal,
     attack: usize,
@@ -224,7 +225,6 @@ impl Friend {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-#[derive(Copy, Clone, Hash, Debug, Eq, PartialEq)]
 struct Shop {
     // XXX More slots get added to the shop over time
     animals: [Option<Friend>; STORE_ANIMAL_COUNT],
@@ -272,7 +272,6 @@ impl Shop {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-#[derive(Copy, Clone, Hash, Debug, Eq, PartialEq)]
 struct BuyPhase<R: rand::Rng> {
     team: Team,
     gold: usize,
@@ -439,7 +438,7 @@ impl<R: rand::Rng> BuyPhase<R> {
     }
 
     fn step_random(&mut self) -> bool {
-        match self.rng.gen_range(0..4) {
+        match self.rng.gen_range(0..=4) {
             // Buy an animal
             0 => {
                 if self.gold == 0 {
@@ -481,6 +480,39 @@ impl<R: rand::Rng> BuyPhase<R> {
                     self.gold -= 1;
                 }
             }
+            // Attempt to combine
+            4 => {
+                let mut targets = [[false; TEAM_SIZE]; TEAM_SIZE];
+                let mut any_targets = false;
+                for i in 0..TEAM_SIZE {
+                    for j in (i + 1)..TEAM_SIZE {
+                        let a = self.team.0[i];
+                        let b = self.team.0[j];
+                        if a.is_some() && b.is_some() && a.unwrap().animal == b.unwrap().animal {
+                            targets[i][j] = true;
+                            targets[j][i] = true;
+                            any_targets = true;
+                        }
+                    }
+                }
+                if any_targets {
+                    let i = loop {
+                        let i = self.rng.gen_range(0..TEAM_SIZE);
+                        if targets[i].iter().any(|i| *i) {
+                            break i;
+                        }
+                    };
+                    let j = loop {
+                        let j = self.rng.gen_range(0..TEAM_SIZE);
+                        if targets[i][j] {
+                            break j;
+                        }
+                    };
+                    let friend = self.team.0[i].take().unwrap();
+                    trace!("Merging {} at {} into {}", friend.animal, i, j);
+                    self.combine_animal(j, friend);
+                }
+            }
             i => panic!("Invalid random choice {}", i),
         }
         false
@@ -499,7 +531,7 @@ impl<R: rand::Rng> BuyPhase<R> {
 
 /// Up to five animal friends.  The front of the team is at index 0, i.e.
 /// attacking and defending first.
-#[derive(Copy, Clone, Hash, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Hash, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct Team([Option<Friend>; TEAM_SIZE]);
 
 impl Team {
@@ -673,24 +705,38 @@ fn random_team(seed: u64) -> Team {
 fn main() {
     env_logger::init();
     let args = std::env::args();
+    let exit_flag = std::sync::Arc::new(AtomicBool::new(false));
+    let exit_flag_copy = exit_flag.clone();
+    ctrlc::set_handler(move || exit_flag_copy.store(true, Ordering::Release)).unwrap();
     match args.len() {
         1 => {
             let mut seen = HashSet::new();
             for i in 0.. {
+                // Check the flag periodically for Ctrl-C
+                if i % 100 == 0 && exit_flag.load(Ordering::Acquire) {
+                    break;
+                }
                 let seed = rand::thread_rng().gen();
                 let team = random_team(seed);
                 if seen.insert(team) {
-                    println!("New team [{}]:\n{}", seed, team);
+                    debug!("New team [{}]:\n{}", seed, team);
                 }
-                if i % 10000 == 0 {
-                    println!("{} [{}]", i, seen.len());
+                if i % 1000000 == 0 {
+                    debug!("{} [{}]", i, seen.len());
                 }
             }
+            let filename = "teams.ron";
+            info!("Saving teams to '{}'", filename);
+            std::fs::write(
+                filename,
+                ron::to_string(&seen).expect("Failed to serialize teams"),
+            )
+            .expect("Failed to save teams");
         }
         2 => {
             let seed = args.last().unwrap().parse().unwrap();
             let team = random_team(seed);
-            println!("{}", team);
+            debug!("Got team [{}]:\n{}", seed, team);
         }
         i => {
             panic!("Invalid argument count {}", i);
