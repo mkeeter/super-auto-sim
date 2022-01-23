@@ -65,7 +65,7 @@ impl Animal {
 
     /// Returns the default health and attack for an animal; panics if the
     /// selected animal can't be purchased from the shop.
-    fn default_power(&self) -> (u32, u32) {
+    fn default_power(&self) -> (usize, usize) {
         match self {
             Self::Ant => (2, 1),
             Self::Beaver => (2, 2),
@@ -78,6 +78,22 @@ impl Animal {
             Self::Pig => (3, 1),
 
             Self::GhostCricket | Self::Bee => panic!("Cannot purchase {:?}", self),
+        }
+    }
+
+    fn can_purchase(&self) -> bool {
+        match self {
+            Self::Ant
+            | Self::Beaver
+            | Self::Cricket
+            | Self::Duck
+            | Self::Fish
+            | Self::Horse
+            | Self::Mosquito
+            | Self::Otter
+            | Self::Pig => true,
+
+            Self::GhostCricket | Self::Bee => false,
         }
     }
 
@@ -178,9 +194,10 @@ impl std::fmt::Display for Modifier {
 #[derive(Copy, Clone, Hash, Debug, Eq, PartialEq)]
 struct Friend {
     animal: Animal,
-    attack: u32,
-    health: u32,
+    attack: usize,
+    health: usize,
     modifier: Option<Modifier>,
+    exp: usize,
 }
 
 impl Friend {
@@ -192,6 +209,15 @@ impl Friend {
             health,
             attack,
             modifier,
+            exp: 0,
+        }
+    }
+    fn level(&self) -> usize {
+        match self.exp {
+            0..=2 => 1,
+            3..=5 => 1,
+            6 => 3,
+            exp => panic!("Invalid exp: {}", exp),
         }
     }
 }
@@ -200,11 +226,51 @@ impl Friend {
 
 #[derive(Copy, Clone, Hash, Debug, Eq, PartialEq)]
 struct Shop {
+    // XXX More slots get added to the shop over time
     animals: [Option<Friend>; STORE_ANIMAL_COUNT],
     foods: [Option<Food>; STORE_FOOD_COUNT],
 }
 
 impl Shop {
+    fn new_deterministic() -> Vec<Self> {
+        let mut animals = vec![[None; STORE_ANIMAL_COUNT]];
+        for i in 0..STORE_ANIMAL_COUNT {
+            let mut next = Vec::new();
+            for j in &animals {
+                for species in Animal::into_enum_iter().filter(Animal::can_purchase) {
+                    let mut j = *j;
+                    j[i] = Some(Friend::new(species));
+                    next.push(j);
+                }
+            }
+            std::mem::swap(&mut animals, &mut next);
+        }
+
+        let mut foods = vec![[None; STORE_FOOD_COUNT]];
+        for i in 0..STORE_FOOD_COUNT {
+            let mut next = Vec::new();
+            for j in &foods {
+                for food in Food::into_enum_iter() {
+                    let mut j = *j;
+                    j[i] = Some(food);
+                    next.push(j);
+                }
+            }
+            std::mem::swap(&mut foods, &mut next);
+        }
+
+        let mut out = Vec::new();
+        for a in &animals {
+            for f in &foods {
+                out.push(Shop {
+                    animals: *a,
+                    foods: *f,
+                });
+            }
+        }
+        out
+    }
+
     fn new<R: rand::Rng>(rng: &mut R) -> Self {
         let mut animals = [None; STORE_ANIMAL_COUNT];
         for a in animals.iter_mut() {
@@ -256,33 +322,57 @@ struct BuyPhase<R: rand::Rng> {
 impl<R: rand::Rng> BuyPhase<R> {
     /// Buys the animal at `shop_pos` and adds it to `team_pos`
     fn buy_animal(&mut self, shop_pos: usize, team_pos: usize) {
-        // TODO: combining animals!
-        assert!(self.team.0[team_pos].is_none());
         assert!(self.gold >= 3);
 
         self.gold -= 3;
         let friend = self.shop.animals[shop_pos].take().unwrap();
-        trace!("Buying {} at position {}", friend.animal, team_pos);
-        self.on_buy(friend);
-        self.team.0[team_pos] = Some(friend);
 
-        for i in 0..TEAM_SIZE {
-            if i != team_pos && self.team.0[i].is_some() {
-                self.team.on_summon(i, team_pos);
+        match &mut self.team.0[team_pos] {
+            None => {
+                trace!("Buying {} at position {}", friend.animal, team_pos);
+                self.on_buy(friend);
+                self.team.0[team_pos] = Some(friend);
+
+                for i in 0..TEAM_SIZE {
+                    if i != team_pos && self.team.0[i].is_some() {
+                        self.team.on_summon(i, team_pos);
+                    }
+                }
+            }
+            Some(target) => {
+                assert!(target.animal == friend.animal);
+                self.combine_animal(team_pos, friend);
+
+                // The on-buy trigger happens after the animals are combined,
+                // which matters in cases where the animal levels up.  For
+                // convenience, we remove the animal from the team briefly,
+                // then reinstall it.
+                let friend = self.team.0[team_pos].take().unwrap();
+                self.on_buy(friend);
+                self.team.0[team_pos] = Some(friend);
             }
         }
+        // XXX: There are also "friend is bought" triggers, but nothing in Tier
+        // 1 uses them
+    }
 
-        // XXX: There are also buy triggers, but nothing in Tier 1 uses them
+    fn combine_animal(&mut self, team_pos: usize, g: Friend) {
+        let f = self.team.0[team_pos].as_mut().unwrap();
+        assert!(f.animal == g.animal);
+        trace!("Combining {} at position {}", f.animal, team_pos);
+        f.health = std::cmp::max(f.health, g.health) + 1;
+        f.attack = std::cmp::max(f.attack, g.attack) + 1;
+        f.exp += 1;
+        // TODO: handle level-up here
     }
 
     fn sell_animal(&mut self, team_pos: usize) {
         assert!(self.team.0[team_pos].is_some());
 
-        // XXX: This changes depending on level
-        self.gold += 1;
-
         let a = self.team.0[team_pos].take().unwrap();
         trace!("Selling {} at position {}", a.animal, team_pos);
+
+        self.gold += a.level();
         self.on_sell(a);
         for i in 0..TEAM_SIZE {
             if i != team_pos && self.team.0[i].is_some() {
@@ -326,10 +416,15 @@ impl<R: rand::Rng> BuyPhase<R> {
             Animal::Otter => {
                 // Give a random friend (+1, +1)
                 for i in self.team.random_friends(1, &mut self.rng) {
-                    trace!("    🦦 on buy bufs {} at {} by ❤️  +1, ⚔️  +1", f.animal, i);
-                    let f = self.team.0[i].as_mut().unwrap();
-                    f.health += 1;
-                    f.attack += 1;
+                    let g = self.team.0[i].as_mut().unwrap();
+                    trace!(
+                        "    {} on buy bufs {} at {} by ❤️  +1, ⚔️  +1",
+                        f.animal,
+                        g.animal,
+                        i
+                    );
+                    g.health += 1;
+                    g.attack += 1;
                 }
             }
             _ => (),
@@ -342,32 +437,37 @@ impl<R: rand::Rng> BuyPhase<R> {
         match a.animal {
             Animal::Beaver => {
                 // Give two random friends +1 Health
+                let delta = a.level();
                 for i in self.team.random_friends(2, &mut self.rng) {
                     let f = self.team.0[i].as_mut().unwrap();
                     trace!(
-                        "    {} on sell bufs {} at {} b❤️  +1 ",
+                        "    {} on sell bufs {} at {} b❤️  +{} ",
                         a.animal,
                         f.animal,
-                        i
+                        i,
+                        delta
                     );
-                    f.health += 1;
+                    f.health += delta;
                 }
             }
             Animal::Duck => {
                 // Give shop pets +1 Health
+                // XXX: this changes with level
+                let delta = a.level();
                 for f in self.shop.animals.iter_mut().flatten() {
                     trace!(
-                        "    {} on sell bufs {} in shop by ❤️  +1",
+                        "    {} on sell bufs {} in shop by ❤️  +{}",
                         a.animal,
-                        f.animal
+                        f.animal,
+                        delta
                     );
-                    f.health += 1;
+                    f.health += delta;
                 }
             }
             Animal::Pig => {
-                trace!("    {} on sell gives +1 gold", a.animal);
-                // Give player +1 gold
-                self.gold += 1;
+                let delta = a.level();
+                trace!("    {} on sell gives 🪙 +{}", a.animal, delta);
+                self.gold += delta;
             }
             _ => (),
         }
@@ -384,10 +484,11 @@ impl<R: rand::Rng> BuyPhase<R> {
                 if self.gold == 0 {
                     return true;
                 } else if self.gold >= 3 {
-                    let i = self.shop.random_friend(&mut self.rng);
-                    let j = self.team.random_empty_slot(&mut self.rng);
-                    if i.is_some() && j.is_some() {
-                        self.buy_animal(i.unwrap(), j.unwrap());
+                    if let Some(i) = self.shop.random_friend(&mut self.rng) {
+                        let a = self.shop.animals[i].unwrap().animal;
+                        if let Some(j) = self.team.random_compatible_slot(a, &mut self.rng) {
+                            self.buy_animal(i, j);
+                        }
                     }
                 }
             }
@@ -508,14 +609,19 @@ impl Team {
     }
 
     /// Returns a random empty slot, or `None` if the team is full
-    fn random_empty_slot<R: rand::Rng>(&self, rng: &mut R) -> Option<usize> {
+    fn random_compatible_slot<R: rand::Rng>(&self, a: Animal, rng: &mut R) -> Option<usize> {
         if self.0.iter().all(|i| i.is_some()) {
             return None;
         }
         loop {
             let i = rng.gen_range(0..STORE_ANIMAL_COUNT);
-            if self.0[i].is_none() {
-                return Some(i);
+            match self.0[i] {
+                None => return Some(i),
+                Some(f) => {
+                    if f.animal == a {
+                        return Some(i);
+                    }
+                }
             }
         }
     }
@@ -605,6 +711,9 @@ fn random_team(seed: u64) -> Team {
 
 fn main() {
     env_logger::init();
+    let s = Shop::new_deterministic();
+    println!("Got {} shops", s.len());
+    panic!("lol");
     let args = std::env::args();
     match args.len() {
         1 => {
