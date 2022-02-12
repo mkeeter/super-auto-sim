@@ -2,7 +2,18 @@ use crate::{modifier::Modifier, species::Species};
 use serde::{Deserialize, Serialize};
 
 /// A [Friend] is an species embodied onto a team (or in the shop)
-#[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+)]
 pub struct Friend {
     pub species: Species,
     pub attack: usize,
@@ -22,6 +33,9 @@ impl Friend {
             modifier,
             exp: 0,
         }
+    }
+    pub fn has_default_power(&self) -> bool {
+        (self.health, self.attack) == self.species.default_power()
     }
     pub fn level(&self) -> usize {
         match self.exp {

@@ -1,8 +1,19 @@
-use crate::{modifier::Modifier, rng::RangeRng};
+use crate::{dice::Dice, modifier::Modifier};
 use serde::{Deserialize, Serialize};
 
 /// Tier 1 speciess in the free-to-play pack
-#[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+)]
 pub enum Species {
     Ant,
     Beaver,
@@ -55,30 +66,14 @@ impl Species {
         }
     }
 
-    pub fn can_purchase(&self) -> bool {
-        match self {
-            Self::Ant
-            | Self::Beaver
-            | Self::Cricket
-            | Self::Duck
-            | Self::Fish
-            | Self::Horse
-            | Self::Mosquito
-            | Self::Otter
-            | Self::Pig => true,
-
-            Self::GhostCricket | Self::Bee => false,
-        }
-    }
-
     /// Returns the default modifier for the species, which is `None` for all
     /// Tier 1 units.
     pub fn default_modifier(&self) -> Option<Modifier> {
         None
     }
 
-    pub fn sample<R: RangeRng>(rng: &mut R) -> Self {
-        match rng.gen_range(0..9) {
+    pub fn sample<R: Dice>(rng: &mut R) -> Self {
+        match rng.roll(0..9) {
             0 => Species::Ant,
             1 => Species::Beaver,
             2 => Species::Cricket,

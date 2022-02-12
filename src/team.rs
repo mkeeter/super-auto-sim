@@ -1,19 +1,59 @@
+use itertools::Itertools;
 use log::trace;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    friend::Friend, modifier::Modifier, params::TEAM_SIZE, rng::RangeRng,
+    dice::Dice, friend::Friend, modifier::Modifier, params::TEAM_SIZE,
     species::Species,
 };
 
 /// Up to five species friends.  The front of the team is at index 0, i.e.
 /// attacking and defending first.
-#[derive(Copy, Clone, Hash, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(
+    Copy,
+    Clone,
+    Hash,
+    Debug,
+    Deserialize,
+    Eq,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+)]
 pub struct Team([Option<Friend>; TEAM_SIZE]);
 
 impl Team {
     pub fn new() -> Self {
         Team([None; TEAM_SIZE])
+    }
+
+    pub fn compact_permutations(&self) -> impl Iterator<Item = Self> + '_ {
+        let count = self.count();
+        self.0
+            .iter()
+            .cloned()
+            .flatten()
+            .permutations(count)
+            .map(|t| {
+                let mut fs = [None; 5];
+                for (i, f) in t.into_iter().enumerate() {
+                    fs[i] = Some(f);
+                }
+                Team(fs)
+            })
+    }
+
+    /// Checks to see whether the given team is dumb.  A dumb team has fewer
+    /// than three members and all of its members have their stock HP, i.e.
+    /// there's no reason not to have three members
+    pub fn is_dumb(&self) -> bool {
+        self.count() < 3
+            && self
+                .0
+                .iter()
+                .flatten()
+                .all(|f| f.modifier.is_none() && f.has_default_power())
     }
 
     /// Asks the species at position `i` to perform on-summon actions, with
@@ -50,28 +90,27 @@ impl Team {
     }
 
     /// Picks some number of random friends from the team, returning an iterator
-    pub fn random_friends<'a, 'b, R: RangeRng>(
+    pub fn random_friends<'a, 'b, R: Dice>(
         &'a self,
         n: usize,
         rng: &'b mut R,
     ) -> impl Iterator<Item = usize> + 'b {
-        crate::rng::pick_some(rng, n, &self.0)
+        crate::dice::pick_some(rng, n, &self.0)
     }
 
     /// Returns a random friend's index, or `None` if the team is empty
-    pub fn random_friend<R: RangeRng>(&self, rng: &mut R) -> Option<usize> {
-        crate::rng::pick_one_some(rng, &self.0)
+    pub fn random_friend<R: Dice>(&self, rng: &mut R) -> Option<usize> {
+        crate::dice::pick_one(rng, &self.0)
     }
 
-    /// Returns a random empty slot, or `None` if the team is full
-    pub fn random_compatible_slot<R: RangeRng>(
-        &self,
-        a: Species,
-        rng: &mut R,
-    ) -> Option<usize> {
-        crate::rng::pick_one_where(rng, &self.0, |f| {
-            f.is_none() || f.unwrap().species == a
-        })
+    /// Sets experience to 0 for all team members, which is useful when
+    /// deduplicating teams (because exp doesn't matter in battle)
+    pub fn without_exp(&self) -> Self {
+        let mut out = *self;
+        for i in out.0.iter_mut().flatten() {
+            i.exp = 0;
+        }
+        out
     }
 
     /// Shuffles team members so they're tightly packed against 0
@@ -140,7 +179,7 @@ impl Team {
     }
     /// Removes dead speciess from the team, performing their on-death actions
     /// then compacting the team afterwards.
-    pub fn remove_dead<R: RangeRng>(&mut self, rng: &mut R) {
+    pub fn remove_dead<R: Dice>(&mut self, rng: &mut R) {
         let mut changed = false;
         for i in 0..TEAM_SIZE {
             if self[i].is_some() && self[i].unwrap().health == 0 {
@@ -166,7 +205,7 @@ impl Team {
         }
     }
 
-    pub fn on_death<R: RangeRng>(&mut self, f: Friend, i: usize, rng: &mut R) {
+    pub fn on_death<R: Dice>(&mut self, f: Friend, i: usize, rng: &mut R) {
         assert!(self[i].is_none());
         match f.species {
             Species::Cricket => {
@@ -212,7 +251,7 @@ impl Team {
                     modifier: None,
                     exp: 0,
                 };
-                if let Some(i) = self.make_space_at(i) {
+                if self.make_space_at(i) {
                     trace!("Summoning {} at {}", bee.species, i);
                     self[i] = Some(bee);
                     for j in 0..TEAM_SIZE {
@@ -229,38 +268,37 @@ impl Team {
     }
     /// Attempts to make space at the given position.  Returns the empty
     /// position, after shoving speciess around, or None if the team is full.
-    fn make_space_at(&mut self, i: usize) -> Option<usize> {
-        if self.count() == TEAM_SIZE {
-            None
-        } else if self[i].is_none() {
-            Some(i)
-        } else {
-            // Look for an empty slot behind the target slot, and shift
-            // friends backwards (away from 0) to free up slot i
-            for j in (i + 1)..TEAM_SIZE {
-                if self[j].is_none() {
-                    for k in (i..j).rev() {
-                        assert!(self[k + 1].is_none());
-                        self[k + 1] = self[k].take();
-                    }
-                    assert!(self[i].is_none());
-                    return Some(i);
-                }
-            }
-            // Otherwise, look for an empty slot in front of the target
-            // slot, and shift friends forwards (towards 0)
-            for j in 0..i {
-                if self[j].is_none() {
-                    for k in j..i {
-                        assert!(self[k].is_none());
-                        self[k] = self[k + 1].take();
-                    }
-                    assert!(self[i].is_none());
-                    return Some(j);
-                }
-            }
-            unreachable!()
+    pub fn make_space_at(&mut self, i: usize) -> bool {
+        if self[i].is_none() {
+            return true;
         }
+        // Look for an empty slot behind the target slot, and shift
+        // friends backwards (away from 0) to free up slot i
+        for j in (i + 1)..TEAM_SIZE {
+            if self[j].is_none() {
+                for k in (i..j).rev() {
+                    assert!(self[k + 1].is_none());
+                    self[k + 1] = self[k].take();
+                }
+                assert!(self[i].is_none());
+                return true;
+            }
+        }
+        // Otherwise, look for an empty slot in front of the target
+        // slot, and shift friends forwards (towards 0)
+        for j in 0..i {
+            if self[j].is_none() {
+                for k in j..i {
+                    assert!(self[k].is_none());
+                    self[k] = self[k + 1].take();
+                }
+                assert!(self[i].is_none());
+                return true;
+            }
+        }
+
+        assert!(self[i].is_some());
+        false
     }
 }
 

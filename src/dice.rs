@@ -1,11 +1,11 @@
 #[derive(Debug)]
-pub struct Rng {
+pub struct DeterministicDice {
     initialized: bool,
     index: usize,
     data: Vec<(usize, usize, usize)>,
 }
 
-impl Rng {
+impl DeterministicDice {
     pub fn new() -> Self {
         Self {
             initialized: false,
@@ -13,6 +13,11 @@ impl Rng {
             data: vec![],
         }
     }
+
+    pub fn key(&self) -> Vec<usize> {
+        self.data.iter().map(|v| v.2).collect()
+    }
+
     pub fn next(&mut self) -> bool {
         if !self.initialized {
             self.initialized = true;
@@ -35,18 +40,19 @@ impl Rng {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-pub trait RangeRng {
-    fn gen_range(&mut self, range: std::ops::Range<usize>) -> usize;
+pub trait Dice {
+    fn roll(&mut self, range: std::ops::Range<usize>) -> usize;
 }
 
-impl<R: rand::Rng> RangeRng for R {
-    fn gen_range(&mut self, range: std::ops::Range<usize>) -> usize {
+impl<R: rand::Rng> Dice for R {
+    fn roll(&mut self, range: std::ops::Range<usize>) -> usize {
         rand::Rng::gen_range(self, range)
     }
 }
 
-impl RangeRng for Rng {
-    fn gen_range(&mut self, range: std::ops::Range<usize>) -> usize {
+impl Dice for DeterministicDice {
+    fn roll(&mut self, range: std::ops::Range<usize>) -> usize {
+        //println!("    {:?} {:?}", range, self);
         let out = if let Some((lo, hi, v)) = self.data.get(self.index) {
             assert!(*lo == range.start);
             assert!(*hi == range.end);
@@ -57,6 +63,7 @@ impl RangeRng for Rng {
             self.data.push((range.start, range.end, range.start));
             range.start
         };
+        //println!("    => {}", out);
         self.index += 1;
         out
     }
@@ -65,43 +72,23 @@ impl RangeRng for Rng {
 ////////////////////////////////////////////////////////////////////////////////
 
 /// Chooses up to `n` items from `vs`, returning indices `i` where `f(vs[i])`
-pub fn pick_where<'a, 'b, R: RangeRng, T, F: Fn(&T) -> bool>(
-    rng: &'a mut R,
+pub fn pick_some<'a, 'b, D: Dice, T: 'a>(
+    dice: &'a mut D,
     mut n: usize,
-    vs: &'b [T],
-    f: F,
+    vs: &'b [Option<T>],
 ) -> impl Iterator<Item = usize> + 'a {
-    let mut mask: Vec<bool> = vs.iter().map(|v| f(v)).collect();
+    let mut mask: Vec<bool> = vs.iter().map(Option::is_some).collect();
     let count = mask.iter().filter(|i| **i).count();
     n = std::cmp::min(n, count);
 
     (0..n).map(move |i| {
-        let j = rng.gen_range(0..(count - i));
+        let j = dice.roll(0..(count - i));
         let k = mask.iter().enumerate().filter(|i| *i.1).nth(j).unwrap().0;
         mask[k] = false;
         k
     })
 }
 
-pub fn pick_one_where<R: RangeRng, T, F: Fn(&T) -> bool>(
-    rng: &mut R,
-    vs: &[T],
-    f: F,
-) -> Option<usize> {
-    pick_where(rng, 1, vs, f).next()
-}
-
-pub fn pick_some<'a, 'b, R: RangeRng, T: 'a>(
-    rng: &'a mut R,
-    n: usize,
-    vs: &'b [Option<T>],
-) -> impl Iterator<Item = usize> + 'a {
-    pick_where(rng, n, vs, Option::is_some)
-}
-
-pub fn pick_one_some<R: RangeRng, T>(
-    rng: &mut R,
-    vs: &[Option<T>],
-) -> Option<usize> {
-    pick_some(rng, 1, vs).next()
+pub fn pick_one<D: Dice, T>(dice: &mut D, vs: &[Option<T>]) -> Option<usize> {
+    pick_some(dice, 1, vs).next()
 }

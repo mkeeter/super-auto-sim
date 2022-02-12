@@ -6,11 +6,11 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-ctrlc = "3.2.1"
-enum-iterator = "0.7.0"
+bincode = "1"
 env_logger = "0.9"
+flate2 = "1.0"
+hashbrown = "0.12.0"
+itertools = "0.10.3"
 log = "0.4"
 rand = "0.8"
-rand_chacha = "0.3"
-ron = "0.7"
 serde = { version = "1", features = ["derive"] }

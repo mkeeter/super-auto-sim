@@ -1,4 +1,4 @@
-use crate::rng::RangeRng;
+use crate::dice::Dice;
 
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Food {
@@ -13,8 +13,8 @@ impl Food {
             Self::Honey => '🍯',
         }
     }
-    pub fn sample<R: RangeRng>(rng: &mut R) -> Self {
-        match rng.gen_range(0..2) {
+    pub fn sample<R: Dice>(rng: &mut R) -> Self {
+        match rng.roll(0..2) {
             0 => Food::Apple,
             1 => Food::Honey,
             _ => panic!("Invalid random number"),

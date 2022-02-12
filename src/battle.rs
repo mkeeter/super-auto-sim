@@ -2,9 +2,10 @@ use log::trace;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    rng::RangeRng,
+    dice::Dice,
+    params::TEAM_SIZE,
     species::Species,
-    team::{Team, TeamPrinter, TEAM_SIZE},
+    team::{Team, TeamPrinter},
 };
 
 #[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -19,13 +20,9 @@ pub struct Battle(pub Team, pub Team);
 
 impl Battle {
     /// Simulates a battle, returning the winner
-    pub fn run(mut self) -> Winner {
-        use rand::{Rng, SeedableRng};
-        let seed = rand::thread_rng().gen();
-        let mut rng = rand_chacha::ChaChaRng::seed_from_u64(seed);
-
+    pub fn run<R: Dice>(mut self, rng: &mut R) -> Winner {
         trace!("Initial state:\n{}", self);
-        self.before_battle(&mut rng);
+        self.before_battle(rng);
         for i in 0.. {
             trace!("Round {}:\n{}", i, self);
             match (self.0.is_empty(), self.1.is_empty()) {
@@ -41,14 +38,14 @@ impl Battle {
                     trace!("Battle ended with a win for Team B");
                     return Winner::TeamB;
                 }
-                (false, false) => self.step(&mut rng),
+                (false, false) => self.step(rng),
             }
         }
         unreachable!();
     }
 
     /// Performs pre-battle actions, returning all possible states
-    fn before_battle<R: RangeRng>(&mut self, rng: &mut R) {
+    fn before_battle<R: Dice>(&mut self, rng: &mut R) {
         for t in [true, false] {
             for i in 0..TEAM_SIZE {
                 self.on_battle_start(i, t, rng);
@@ -59,12 +56,8 @@ impl Battle {
         self.0.remove_dead(rng);
         self.1.remove_dead(rng);
     }
-    fn on_battle_start<R: RangeRng>(
-        &mut self,
-        i: usize,
-        team: bool,
-        rng: &mut R,
-    ) {
+
+    fn on_battle_start<R: Dice>(&mut self, i: usize, team: bool, rng: &mut R) {
         let f = match self[team][i] {
             Some(f) => f,
             None => return,
@@ -88,7 +81,7 @@ impl Battle {
     }
 
     /// Executes a single step of the battle, returning true if the battle ended
-    fn step<R: RangeRng>(&mut self, rng: &mut R) {
+    fn step<R: Dice>(&mut self, rng: &mut R) {
         let f = self.0[0].as_mut().unwrap();
         let g = self.1[0].as_mut().unwrap();
         trace!("{} clashes with {}!", f.species, g.species);
