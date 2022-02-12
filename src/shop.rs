@@ -67,27 +67,11 @@ impl Shop {
 
     /// Picks a random friend from the shop, returning its index
     pub fn random_friend<R: Dice>(&mut self, rng: &mut R) -> Option<usize> {
-        let n = self.shop_friends.iter().flatten().count();
-        if n == 0 {
-            return None;
-        }
-        let i = rng.roll(0..n);
-        let j = self
-            .shop_friends
-            .iter()
-            .enumerate()
-            .filter(|p| p.1.is_some())
-            .nth(i)
-            .unwrap()
-            .0;
-        assert!(self.shop_friends[j].is_some());
-        Some(j)
+        crate::dice::pick_one(rng, &self.shop_friends)
     }
 
+    /// Picks a random food from the shop, returning its index
     pub fn random_food<R: Dice>(&self, rng: &mut R) -> Option<usize> {
-        if self.shop_foods.iter().all(|i| i.is_none()) {
-            return None;
-        }
         crate::dice::pick_one(rng, &self.shop_foods)
     }
 

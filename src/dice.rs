@@ -2,7 +2,7 @@
 pub struct DeterministicDice {
     initialized: bool,
     index: usize,
-    data: Vec<(usize, usize, usize)>,
+    data: Vec<(usize, std::ops::Range<usize>)>,
 }
 
 impl DeterministicDice {
@@ -14,8 +14,25 @@ impl DeterministicDice {
         }
     }
 
-    pub fn key(&self) -> Vec<usize> {
-        self.data.iter().map(|v| v.2).collect()
+    /// Converts the given DeterministicDice state into a string key.
+    /// Panics if any of the choices can't be represented as a single
+    /// base-36 number.
+    pub fn key(&self) -> String {
+        self.data
+            .iter()
+            .map(|v| char::from_digit(v.0.try_into().unwrap(), 36).unwrap())
+            .collect::<String>()
+    }
+
+    pub fn from_key(s: &str) -> Self {
+        Self {
+            initialized: true,
+            index: 0,
+            data: s
+                .chars()
+                .map(|c| (char::to_digit(c, 36).unwrap() as usize, 0..0))
+                .collect(),
+        }
     }
 
     pub fn next(&mut self) -> bool {
@@ -23,12 +40,12 @@ impl DeterministicDice {
             self.initialized = true;
             true
         } else {
-            while let Some((lo, hi, mut v)) = self.data.pop() {
+            while let Some((mut v, r)) = self.data.pop() {
                 v += 1;
-                if v >= hi {
+                if v >= r.end {
                     continue;
                 } else {
-                    self.data.push((lo, hi, v));
+                    self.data.push((v, r));
                     break;
                 }
             }
@@ -52,18 +69,19 @@ impl<R: rand::Rng> Dice for R {
 
 impl Dice for DeterministicDice {
     fn roll(&mut self, range: std::ops::Range<usize>) -> usize {
-        //println!("    {:?} {:?}", range, self);
-        let out = if let Some((lo, hi, v)) = self.data.get(self.index) {
-            assert!(*lo == range.start);
-            assert!(*hi == range.end);
-            assert!(*v >= range.start);
-            assert!(*v < range.end);
+        let out = if let Some((v, r)) = self.data.get_mut(self.index) {
+            // Special-case if a DeterministicDice has been loaded from a
+            // key, which doesn't preserve ranges (to keep small).
+            if (*r).is_empty() {
+                *r = range.clone();
+            }
+            assert!(*r == range);
+            assert!(range.contains(v));
             *v
         } else {
-            self.data.push((range.start, range.end, range.start));
+            self.data.push((range.start, range.clone()));
             range.start
         };
-        //println!("    => {}", out);
         self.index += 1;
         out
     }

@@ -1,9 +1,6 @@
-use std::io::{Read, Write};
-
-use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
 use hashbrown::{HashMap, HashSet};
 use log::{debug, info, trace, LevelFilter};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 
 mod battle;
 mod dice;
@@ -14,41 +11,19 @@ mod params;
 mod shop;
 mod species;
 mod team;
+mod util;
 
 use battle::{Battle, Winner};
 use dice::DeterministicDice;
 use params::TEAM_SIZE;
 use shop::Shop;
 use team::Team;
+use util::{read_compressed, write_compressed};
 
 ////////////////////////////////////////////////////////////////////////////////
 
 const TEAMS_FILE: &str = "teams.binz";
 const SCORES_FILE: &str = "scores.binz";
-
-fn write_compressed<D: Serialize>(d: &D, f: &str) {
-    let mut compressor = ZlibEncoder::new(Vec::new(), Compression::default());
-    let data = &bincode::serialize(d).expect("Failed to serialize");
-    compressor
-        .write_all(data)
-        .expect("Failed to write data to compressor");
-    let compressed = compressor.finish().expect("Failed to compress");
-    std::fs::write(f, compressed).expect("Failed to save");
-}
-
-fn read_compressed<D: DeserializeOwned>(f: &str) -> Option<D> {
-    if let Ok(d) = std::fs::read(f) {
-        let mut decompressor = ZlibDecoder::new(&*d);
-        let mut data = vec![];
-        decompressor
-            .read_to_end(&mut data)
-            .expect("Could not decoompress");
-        let out: D = bincode::deserialize(&data).unwrap();
-        Some(out)
-    } else {
-        None
-    }
-}
 
 fn generate_teams() -> Vec<Team> {
     let mut active_shops = HashSet::new();
