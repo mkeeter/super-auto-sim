@@ -56,17 +56,21 @@ impl Shop {
         out
     }
 
+    /// Rerolls the shop
     fn reroll<R: Dice>(&mut self, rng: &mut R) {
         for a in self.shop_friends.iter_mut() {
             *a = Some(Friend::new(Species::sample(rng)));
         }
+
         for f in self.shop_foods.iter_mut() {
             *f = Some(Food::sample(rng));
         }
+        self.shop_friends.sort();
+        self.shop_foods.sort();
     }
 
     /// Picks a random friend from the shop, returning its index
-    pub fn random_friend<R: Dice>(&mut self, rng: &mut R) -> Option<usize> {
+    pub fn random_friend<R: Dice>(&self, rng: &mut R) -> Option<usize> {
         crate::dice::pick_one(rng, &self.shop_friends)
     }
 
@@ -87,6 +91,7 @@ impl Shop {
 
         self.gold -= 3;
         let friend = self.shop_friends[shop_pos].take().unwrap();
+        self.shop_friends.sort();
 
         trace!("Buying {} at position {}", friend.species, team_pos);
         self.on_buy(friend, rng);
@@ -128,6 +133,8 @@ impl Shop {
 
         let friend = self.team[team_pos].as_mut().unwrap();
         let food = self.shop_foods[shop_pos].take().unwrap();
+        self.shop_foods.sort();
+
         self.gold -= 3;
         trace!(
             "Buying {} for {} at position {}",
@@ -190,8 +197,7 @@ impl Shop {
                 }
             }
             Species::Duck => {
-                // Give shop pets +1 Health
-                // XXX: this changes with level
+                // Give shop pets bonus health depending on level
                 let delta = a.level();
                 for f in self.shop_friends.iter_mut().flatten() {
                     trace!(
@@ -271,19 +277,16 @@ impl Shop {
             }
             // Reroll
             ShopAction::Reroll => {
-                // We only reroll shops if they are empty of either animals
-                // or food, _or_ have exclusively animals with non-default
-                // power.  If there are animals with default power, then we
+                // We only reroll shops if they are missing animals or food
+                // _or_ have any animals with non-default power.  If there are
+                // animals with default power, then we
                 // could have _different_ animals in a different timeline,
                 // so rerolling doesn't accomplish anything.
                 if self.gold == 0 {
                     trace!("No gold to reroll; exiting");
                     return true;
-                } else if self.shop_foods.iter().all(Option::is_none)
-                    || self.shop_friends.iter().all(|f| match f {
-                        None => true,
-                        Some(f) => !f.has_default_power(),
-                    })
+                } else if self.shop_foods.iter().any(Option::is_none)
+                    || self.shop_friends.iter().any(Option::is_none)
                 {
                     trace!("Re-rolling shop");
                     self.reroll(rng);
@@ -387,6 +390,8 @@ impl Shop {
 
                 assert!(b);
                 let friend = self.shop_friends[i].take().unwrap();
+                self.shop_friends.sort();
+
                 self.gold -= 3;
                 self.combine_friends(j, friend);
                 trace!("Buying {} and combining at {}", friend.species, j);

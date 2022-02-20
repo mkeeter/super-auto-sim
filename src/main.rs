@@ -63,15 +63,24 @@ fn generate_teams() -> Vec<Team> {
             while dice.next() {
                 let mut shop = shop;
                 let done = shop.step(&mut dice);
-                let team = shop.team;
+
+                // Sort the team for shop state deduplication; we'll generate
+                // every possible team to field in battle later on.
+                shop.team.sort();
+
                 // Do an early check here to make sure we haven't seen this
                 // shop before, _before_ building every possible permutation
                 if next.contains(&shop) {
                     continue;
                 }
 
+                if !done {
+                    next.insert(shop);
+                }
+
                 // Store all possible compact permutations of this team, to
                 // minimize the amount of exploration required.
+                let team = shop.team;
                 for team in team.compact_permutations() {
                     shop.team = team;
                     if seen_teams.insert(team.without_exp()) {
@@ -81,9 +90,6 @@ fn generate_teams() -> Vec<Team> {
                             seen_teams.len(),
                             team
                         );
-                    }
-                    if !done {
-                        next.insert(shop);
                     }
                 }
             }
@@ -97,6 +103,8 @@ fn generate_teams() -> Vec<Team> {
     seen
 }
 
+////////////////////////////////////////////////////////////////////////////////
+
 #[derive(Copy, Clone, Debug, Default, Deserialize, Serialize)]
 struct Record {
     wins: f32,
@@ -105,7 +113,6 @@ struct Record {
 }
 fn score_teams(teams: &[Team]) -> Vec<Vec<Record>> {
     let mut results = vec![vec![Record::default(); teams.len()]; teams.len()];
-    let mut max_battles = 0;
     for (i, a) in teams.iter().enumerate() {
         for (j, b) in teams.iter().enumerate() {
             let mut team_a = 0;
@@ -121,13 +128,6 @@ fn score_teams(teams: &[Team]) -> Vec<Vec<Record>> {
                     Winner::Tied => ties += 1,
                 }
                 num_battles += 1;
-            }
-            if num_battles > max_battles {
-                info!(
-                    "New best: {} {} {}\n{}\n{}",
-                    team_a, ties, num_battles, a, b
-                );
-                max_battles = num_battles;
             }
             results[i][j] = Record {
                 wins: team_a as f32 / num_battles as f32,
@@ -150,11 +150,14 @@ fn score_teams(teams: &[Team]) -> Vec<Vec<Record>> {
             num_ties / count * 100.0,
             teams[i]
         );
+        println!("{}", num_wins / count);
     }
     results
 }
 
-fn analyze_scores(teams: Vec<Team>, results: Vec<Vec<Record>>) {
+////////////////////////////////////////////////////////////////////////////////
+
+fn analyze_scores(teams: &[Team], results: Vec<Vec<Record>>) {
     let mut most_wins = 0.0;
     let mut best_team = 0;
 
@@ -205,6 +208,8 @@ fn analyze_scores(teams: Vec<Team>, results: Vec<Vec<Record>>) {
     }
 }
 
+////////////////////////////////////////////////////////////////////////////////
+
 fn main() {
     use env_logger::Builder;
 
@@ -242,7 +247,7 @@ fn main() {
                 }
             };
             info!("Analyzing scores");
-            analyze_scores(teams, scores);
+            analyze_scores(&teams, scores);
         }
         2 => {
             // By default, when asked to generate a team, print the verbose

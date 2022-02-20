@@ -1,6 +1,6 @@
 use crate::dice::Dice;
 
-#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Food {
     Apple,
     Honey,

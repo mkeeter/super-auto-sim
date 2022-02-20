@@ -28,6 +28,10 @@ impl Team {
         Team([None; TEAM_SIZE])
     }
 
+    pub fn sort(&mut self) {
+        self.0.sort()
+    }
+
     pub fn compact_permutations(&self) -> impl Iterator<Item = Self> + '_ {
         let count = self.count();
         self.0
